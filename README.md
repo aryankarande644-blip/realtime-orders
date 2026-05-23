@@ -149,15 +149,15 @@ You'll see:
 ✅  WebSocket server attached
 ✅  Listening for DB changes via NOTIFY
 
-📡  Server ready  →  http://localhost:3000
-🔌  WebSocket    →  ws://localhost:3000/ws
+📡  Server ready  →  http://localhost:3001
+🔌  WebSocket    →  ws://localhost:3001/ws
 ```
 
 > The server **auto-creates** the `orders` table and installs the trigger on startup.
 
 ### 5. Open the Browser Client
 
-Navigate to **http://localhost:3000** in one (or more) browser tabs.
+Navigate to **http://localhost:3001** in one (or more) browser tabs.
 
 ### 6. (Optional) Open the CLI Client
 
@@ -188,7 +188,7 @@ You'll see the browser dashboard and CLI client update **instantly** without any
 
 **Example — create an order with curl:**
 ```bash
-curl -X POST http://localhost:3000/api/orders \
+curl -X POST http://localhost:3001/api/orders \
   -H "Content-Type: application/json" \
   -d '{"customer_name":"Alice","product_name":"Desk Lamp","status":"pending"}'
 ```
@@ -268,7 +268,7 @@ Add the Redis layer by replacing `broadcaster.js` with a Redis publisher and add
 
 ## Running Tests (Manual)
 
-1. Open `http://localhost:3000` in **two separate browser windows**.
+1. Open `http://localhost:3001` in **two separate browser windows**.
 2. Run `npm run seed` — watch both windows update simultaneously.
 3. In the browser form, create a new order — both windows and the CLI client update.
 4. Click **advance** to cycle order status — the badge updates with a colour flash.
