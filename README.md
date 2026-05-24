@@ -116,3 +116,21 @@ When a change happens, clients receive:
 ## One thing I'd add with more time
 
 Right now everything runs in a single Node process. If you scale horizontally (multiple instances behind a load balancer), each instance only broadcasts to its own connected clients. The fix is to add Redis pub/sub in the middle — Node publishes to Redis, every instance subscribes and relays to its own clients. The rest of the code stays the same.
+
+## Quick start (for reviewer)
+
+```bash
+git clone https://github.com/aryankarande644-blip/realtime-orders.git
+cd realtime-orders
+npm install
+psql -U postgres -c "CREATE DATABASE realtime_orders;"
+export PGHOST=localhost PGPORT=5432 PGDATABASE=realtime_orders PGUSER=postgres PGPASSWORD=postgres
+npm start
+```
+
+Open http://localhost:3000 — the table and trigger are created automatically.
+
+To see live updates run this in a second terminal:
+```bash
+node scripts/seed.js
+```
