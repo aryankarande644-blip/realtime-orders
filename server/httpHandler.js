@@ -1,17 +1,4 @@
-/**
- * httpHandler.js — Minimal HTTP layer
- *
- * Routes:
- *   GET  /              → serves the browser client (client/index.html)
- *   GET  /api/orders    → list all orders (newest first)
- *   POST /api/orders    → create a new order
- *   PUT  /api/orders/:id → update order status
- *   DELETE /api/orders/:id → delete an order
- *
- * All mutations trigger the Postgres trigger → NOTIFY → WebSocket broadcast.
- */
-
-"use strict";
+// httpHandler.js - REST API for orders + serves the frontend
 
 const fs = require("fs");
 const path = require("path");
@@ -23,7 +10,6 @@ module.exports = function makeHandler(pool) {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const pathname = url.pathname;
 
-    // CORS for local development
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -34,14 +20,12 @@ module.exports = function makeHandler(pool) {
     }
 
     try {
-      // ── Static client ──────────────────────────────────────────────────────
+      // serve the frontend
       if (pathname === "/" || pathname === "/index.html") {
         const html = fs.readFileSync(CLIENT_HTML, "utf8");
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         return res.end(html);
       }
-
-      // ── REST API ───────────────────────────────────────────────────────────
 
       // GET /api/orders
       if (pathname === "/api/orders" && req.method === "GET") {
@@ -62,8 +46,7 @@ module.exports = function makeHandler(pool) {
 
         const { rows } = await pool.query(
           `INSERT INTO orders (customer_name, product_name, status, updated_at)
-           VALUES ($1, $2, $3, NOW())
-           RETURNING *`,
+           VALUES ($1, $2, $3, NOW()) RETURNING *`,
           [customer_name, product_name, status]
         );
         return json(res, 201, rows[0]);
@@ -82,12 +65,11 @@ module.exports = function makeHandler(pool) {
                product_name  = COALESCE($2, product_name),
                status        = COALESCE($3, status),
                updated_at    = NOW()
-           WHERE id = $4
-           RETURNING *`,
+           WHERE id = $4 RETURNING *`,
           [customer_name || null, product_name || null, status || null, id]
         );
 
-        if (rows.length === 0) return json(res, 404, { error: "Order not found" });
+        if (rows.length === 0) return json(res, 404, { error: "not found" });
         return json(res, 200, rows[0]);
       }
 
@@ -96,19 +78,17 @@ module.exports = function makeHandler(pool) {
       if (deleteMatch && req.method === "DELETE") {
         const id = parseInt(deleteMatch[1]);
         const { rowCount } = await pool.query("DELETE FROM orders WHERE id = $1", [id]);
-        if (rowCount === 0) return json(res, 404, { error: "Order not found" });
+        if (rowCount === 0) return json(res, 404, { error: "not found" });
         return json(res, 200, { deleted: true, id });
       }
 
-      json(res, 404, { error: "Not found" });
+      json(res, 404, { error: "not found" });
     } catch (err) {
-      console.error("HTTP handler error:", err.message);
-      json(res, 500, { error: "Internal server error" });
+      console.error("request error:", err.message);
+      json(res, 500, { error: "something went wrong" });
     }
   };
 };
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function json(res, status, data) {
   res.writeHead(status, { "Content-Type": "application/json" });
@@ -121,7 +101,7 @@ function readBody(req) {
     req.on("data", (chunk) => (data += chunk));
     req.on("end", () => {
       try { resolve(JSON.parse(data || "{}")); }
-      catch { reject(new Error("Invalid JSON body")); }
+      catch { reject(new Error("invalid json")); }
     });
     req.on("error", reject);
   });

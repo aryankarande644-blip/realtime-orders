@@ -1,276 +1,118 @@
-# OrderStream — Real-Time Order Updates
+# realtime-orders
 
-A production-quality demonstration of **push-based real-time data propagation** from a PostgreSQL database to browser and CLI clients — with zero polling.
+A real-time order tracking system where the browser updates automatically whenever the database changes — no polling.
 
-```
-PostgreSQL  ──NOTIFY──▶  Node.js  ──WebSocket──▶  Browser / CLI
-  trigger                 server                    clients
-```
+## How it works
 
----
-
-## Why This Approach?
-
-### The Problem with Polling
-
-The naive solution — clients asking "anything new?" every N seconds — wastes bandwidth, adds latency proportional to the polling interval, and hammers the database with redundant queries. At 100 clients polling every second you generate 6 million empty queries per day.
-
-### The Solution: PostgreSQL LISTEN/NOTIFY
-
-PostgreSQL ships with a built-in pub/sub primitive:
-
-| Concept    | Description |
-|------------|-------------|
-| `NOTIFY`   | Sends a text payload (≤8KB) on a named channel, inside a transaction |
-| `LISTEN`   | A connection subscribes to a channel and receives an async callback |
-| Trigger    | A PL/pgSQL function that fires `NOTIFY` on every INSERT/UPDATE/DELETE |
-
-**The flow in this project:**
-
-1. A row changes in the `orders` table.
-2. The `orders_change_trigger` fires `notify_orders_change()`.
-3. That function serialises the old and new row to JSON and calls `pg_notify('orders_changes', payload)`.
-4. The Node.js **listener client** (a dedicated, non-pooled `pg.Client`) receives the notification instantly via an async event.
-5. The Node.js **broadcaster** fans the message out to every connected WebSocket client.
-6. The browser re-renders the changed row with a colour flash — no full page refresh needed.
-
-### Why WebSockets (not SSE)?
-
-| | WebSockets | Server-Sent Events |
-|---|---|---|
-| Direction | Full-duplex | Server → client only |
-| Protocol | `ws://` / `wss://` | Standard HTTP |
-| Browser support | Universal | Universal (excl. old IE) |
-| Reconnect | Manual | Built-in (`EventSource`) |
-| Chosen because | We may send client messages later (e.g. ack) | — |
-
-Both work well here. SSE would be slightly simpler; WebSockets give more flexibility.
-
----
-
-## Architecture Diagram
+The core idea is using PostgreSQL's built-in `LISTEN/NOTIFY` feature instead of polling. A trigger fires on every INSERT/UPDATE/DELETE on the `orders` table, which sends a notification to Node.js. Node then pushes that update to all connected browser clients via WebSocket.
 
 ```
-┌─────────────────────────────────────────────┐
-│                Node.js Process               │
-│                                              │
-│  ┌──────────┐      ┌─────────────────────┐  │
-│  │ HTTP     │      │  Broadcaster        │  │
-│  │ server   │      │  (fan-out to WSS)   │  │
-│  └────┬─────┘      └────────┬────────────┘  │
-│       │  ws upgrade         │ broadcastChange│
-│  ┌────▼─────────────────────▼────────────┐  │
-│  │         WebSocket Server (ws lib)     │  │
-│  └───────────────────────────────────────┘  │
-│                                              │
-│  ┌────────────────────────────────────────┐ │
-│  │  pg Pool  (REST queries)               │ │
-│  └────────────────────────────────────────┘ │
-│  ┌────────────────────────────────────────┐ │
-│  │  pg.Client (LISTEN — never pooled)    │ │
-│  └────────────────────────────────────────┘ │
-└──────────────────┬──────────────────────────┘
-                   │ TCP
-┌──────────────────▼──────────────────────────┐
-│             PostgreSQL 16                    │
-│                                              │
-│  orders table  ──trigger──▶  pg_notify()    │
-└─────────────────────────────────────────────┘
+postgres trigger → pg_notify → node.js → websocket → browser
 ```
 
----
+I chose this approach because polling is wasteful — even at 1 req/sec per client, you're making millions of empty DB calls per day for no reason. With LISTEN/NOTIFY, postgres tells you exactly when something changes.
 
-## Project Structure
+## Stack
+
+- **Node.js** — backend, no framework, just the built-in `http` module
+- **PostgreSQL** — database + change notifications via triggers
+- **WebSockets** (`ws` library) — push updates to clients
+- **Vanilla JS** — frontend, no build step needed
+
+## Project structure
 
 ```
-realtime-orders/
 ├── server/
-│   ├── index.js          # Entry point — wires everything together
-│   ├── db.js             # PG connection pool + LISTEN/NOTIFY
-│   ├── ws.js             # WebSocket server setup + heartbeat
-│   ├── broadcaster.js    # Fan-out DB events to WS clients
-│   └── httpHandler.js    # REST API + serves client HTML
+│   ├── index.js        # entry point
+│   ├── db.js           # postgres connection + LISTEN setup
+│   ├── ws.js           # websocket server
+│   ├── broadcaster.js  # sends events to all connected clients
+│   └── httpHandler.js  # REST API + serves index.html
 ├── client/
-│   └── index.html        # Browser dashboard (vanilla JS, no build step)
+│   └── index.html      # browser dashboard
 ├── scripts/
-│   ├── cli-client.js     # Terminal WebSocket client
-│   └── seed.js           # Populates + updates sample data
-├── docker-compose.yml    # Spin up Postgres in one command
-├── package.json
-└── README.md
+│   ├── seed.js         # inserts sample data to test the live feed
+│   └── cli-client.js   # terminal client (optional)
+└── docker-compose.yml  # spin up postgres quickly
 ```
 
----
+## Running locally
 
-## Quick Start
+**Requirements:** Node.js 18+, PostgreSQL 14+
 
-### 1. Prerequisites
+### With Docker
 
-- **Node.js ≥ 18**
-- **PostgreSQL 14+**  (or Docker)
-
-### 2. Start PostgreSQL
-
-**With Docker (recommended):**
 ```bash
 docker-compose up -d
+npm install
+npm start
 ```
 
-**Or point to your existing Postgres instance** by setting environment variables:
+### Without Docker (if you already have postgres)
+
 ```bash
+# create the database first
+psql -U postgres -c "CREATE DATABASE realtime_orders;"
+
 export PGHOST=localhost
 export PGPORT=5432
 export PGDATABASE=realtime_orders
 export PGUSER=postgres
 export PGPASSWORD=postgres
-```
 
-Create the database if it doesn't exist:
-```sql
-CREATE DATABASE realtime_orders;
-```
-
-### 3. Install Dependencies
-
-```bash
 npm install
-```
-
-### 4. Start the Server
-
-```bash
 npm start
 ```
 
-You'll see:
-```
-🚀  Starting real-time orders server…
-✅  PostgreSQL connected
-✅  WebSocket server attached
-✅  Listening for DB changes via NOTIFY
+Open http://localhost:3000 in your browser. The table and trigger get created automatically on startup.
 
-📡  Server ready  →  http://localhost:3001
-🔌  WebSocket    →  ws://localhost:3001/ws
-```
+### See it in action
 
-> The server **auto-creates** the `orders` table and installs the trigger on startup.
+Run the seed script in a second terminal to insert some orders and simulate status changes:
 
-### 5. Open the Browser Client
-
-Navigate to **http://localhost:3001** in one (or more) browser tabs.
-
-### 6. (Optional) Open the CLI Client
-
-In a second terminal:
-```bash
-npm run client
-```
-
-### 7. Watch Updates Flow
-
-In a third terminal, run the seed script to insert sample orders and simulate status changes:
 ```bash
 npm run seed
 ```
 
-You'll see the browser dashboard and CLI client update **instantly** without any page refresh.
+You should see the browser update in real time without refreshing.
 
----
+## API
 
-## REST API
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/orders` | get all orders |
+| POST | `/api/orders` | create an order |
+| PUT | `/api/orders/:id` | update an order |
+| DELETE | `/api/orders/:id` | delete an order |
 
-| Method | Path | Body | Description |
-|--------|------|------|-------------|
-| `GET`  | `/api/orders` | — | List all orders |
-| `POST` | `/api/orders` | `{ customer_name, product_name, status? }` | Create order |
-| `PUT`  | `/api/orders/:id` | `{ customer_name?, product_name?, status? }` | Update order |
-| `DELETE` | `/api/orders/:id` | — | Delete order |
-
-**Example — create an order with curl:**
+Example:
 ```bash
-curl -X POST http://localhost:3001/api/orders \
+curl -X POST http://localhost:3000/api/orders \
   -H "Content-Type: application/json" \
-  -d '{"customer_name":"Alice","product_name":"Desk Lamp","status":"pending"}'
+  -d '{"customer_name":"Aryan","product_name":"Keyboard","status":"pending"}'
 ```
 
-Any mutation immediately triggers a WebSocket push to all connected clients.
+Every write triggers a WebSocket push to all connected clients instantly.
 
----
+## WebSocket messages
 
-## WebSocket Message Protocol
+When a change happens, clients receive:
 
-### Server → Client
-
-**`CONNECTED`** (sent once on connection):
-```json
-{ "type": "CONNECTED", "clientId": "a1b2c3d4", "serverTime": "2025-05-24T10:00:00.000Z" }
-```
-
-**`ORDER_CHANGE`** (broadcast on every DB change):
 ```json
 {
   "type": "ORDER_CHANGE",
   "operation": "UPDATE",
   "table": "orders",
   "data": {
-    "new": { "id": 3, "customer_name": "Sara", "product_name": "Stand", "status": "delivered", "updated_at": "…" },
-    "old": { "id": 3, "customer_name": "Sara", "product_name": "Stand", "status": "shipped",   "updated_at": "…" }
+    "new": { "id": 1, "status": "shipped", ... },
+    "old": { "id": 1, "status": "pending", ... }
   },
-  "timestamp": "2025-05-24T10:00:05.123Z"
+  "timestamp": "2025-05-24T10:00:00.000Z"
 }
 ```
 
-`data.old` is `null` for INSERT; `data.new` is `null` for DELETE.
+`data.old` is null for INSERT, `data.new` is null for DELETE.
 
----
+## One thing I'd add with more time
 
-## Scalability Considerations
-
-### Current design (single Node instance)
-
-Works well for hundreds of concurrent WebSocket clients. PostgreSQL LISTEN/NOTIFY uses a single persistent connection regardless of the number of clients — the fan-out happens in Node.js memory.
-
-### Scaling horizontally (multiple Node instances)
-
-When you add more Node processes (e.g. behind a load balancer), each instance has its own WebSocket pool and will only receive its own clients' connections. To broadcast to _all_ clients across instances:
-
-```
-PostgreSQL NOTIFY
-       ↓
-  Any Node instance
-       ↓  publish
-    Redis Pub/Sub  ←→  subscribe  ←  All other Node instances
-                                          ↓
-                                    their WS clients
-```
-
-Add the Redis layer by replacing `broadcaster.js` with a Redis publisher and adding a Redis subscriber in `db.js`. The rest of the code remains unchanged.
-
-### pg_notify payload limit
-
-`pg_notify` payloads are capped at **8,000 bytes**. For rows with large text fields (e.g. `description CLOB`), the trigger should emit only the primary key and let Node fetch the full row with a follow-up `SELECT`. The current implementation is correct for the specified schema.
-
----
-
-## Design Decisions Summary
-
-| Decision | Choice | Reason |
-|---|---|---|
-| DB change detection | PostgreSQL triggers + NOTIFY | Zero polling; instant; built-in; transactionally consistent |
-| Transport to clients | WebSockets | Persistent, low-latency, full-duplex |
-| Backend runtime | Node.js | Event-loop model suits high-concurrency I/O; `pg` and `ws` are battle-tested |
-| DB driver | `pg` (node-postgres) | First-class LISTEN/NOTIFY support via async events |
-| Listener connection | Dedicated `pg.Client` (not pooled) | Pool recycles connections; LISTEN state would be lost |
-| Client | Vanilla JS | No build step; instant load; easy to audit |
-| Heartbeat | Ping/pong every 30 s | Detects dead connections that skipped the WS close handshake |
-
----
-
-## Running Tests (Manual)
-
-1. Open `http://localhost:3001` in **two separate browser windows**.
-2. Run `npm run seed` — watch both windows update simultaneously.
-3. In the browser form, create a new order — both windows and the CLI client update.
-4. Click **advance** to cycle order status — the badge updates with a colour flash.
-5. Click **✕** to delete — the row fades out on all clients.
-6. Kill and restart the server — clients auto-reconnect and re-fetch state.
+Right now everything runs in a single Node process. If you scale horizontally (multiple instances behind a load balancer), each instance only broadcasts to its own connected clients. The fix is to add Redis pub/sub in the middle — Node publishes to Redis, every instance subscribes and relays to its own clients. The rest of the code stays the same.
